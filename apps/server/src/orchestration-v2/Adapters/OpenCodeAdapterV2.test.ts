@@ -3,6 +3,7 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import type { OpencodeClient, ToolPart } from "@opencode-ai/sdk/v2";
 import {
   CheckpointId,
+  EnvironmentId,
   NodeId,
   OpenCodeSettings,
   ProjectId,
@@ -32,6 +33,7 @@ import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
 
 import * as ServerConfig from "../../config.ts";
+import * as McpProviderSession from "../../mcp/McpProviderSession.ts";
 import type { EventNdjsonLogger } from "../../provider/EventNdjsonLogger.ts";
 import type { OpenCodeRuntimeShape } from "../../provider/opencodeRuntime.ts";
 import * as IdAllocator from "../IdAllocator.ts";
@@ -2374,6 +2376,148 @@ describe("OpenCodeAdapterV2", () => {
     }).pipe(Effect.provide(IdAllocator.layer)),
   );
 
+  it.effect("rewrites a resumed session's rules for the current web provider, both ways", () =>
+    Effect.gen(function* () {
+      const idAllocator = yield* IdAllocator.IdAllocatorV2;
+      const serverConfig = yield* ServerConfig.ServerConfig;
+      const updates: Array<{
+        sessionID: string;
+        permission: ReturnType<typeof openCodePermissionRules>;
+      }> = [];
+      const fakeClient = {
+        event: {
+          subscribe: async (_input?: unknown, options?: { readonly signal?: AbortSignal }) => ({
+            stream: {
+              [Symbol.asyncIterator]: () => ({
+                next: () =>
+                  new Promise<IteratorResult<never>>((resolve) => {
+                    const done = () => resolve({ done: true, value: undefined });
+                    if (options?.signal?.aborted) return done();
+                    options?.signal?.addEventListener("abort", done, { once: true });
+                  }),
+              }),
+            },
+          }),
+        },
+        mcp: { add: async () => ({ data: {} }) },
+        session: {
+          get: async ({ sessionID }: { sessionID: string }) => ({
+            data: { id: sessionID, time: { created: 1, updated: 1 } },
+          }),
+          update: async (input: {
+            sessionID: string;
+            permission: ReturnType<typeof openCodePermissionRules>;
+          }) => {
+            updates.push(input);
+            return { data: { id: input.sessionID, time: { created: 1, updated: 2 } } };
+          },
+        },
+      } as unknown as OpencodeClient;
+      const unused = (operation: string) => () => Effect.die(`${operation} is not used`);
+      const runtime: OpenCodeRuntimeShape = {
+        startOpenCodeServerProcess: unused("startOpenCodeServerProcess"),
+        connectToOpenCodeServer: () =>
+          Effect.succeed({
+            url: "test://opencode",
+            version: "test",
+            exitCode: null,
+            external: false,
+          }),
+        runOpenCodeCommand: unused("runOpenCodeCommand"),
+        createOpenCodeSdkClient: () => fakeClient,
+        loadOpenCodeInventory: unused("loadOpenCodeInventory"),
+        loadInventoryFromCli: unused("loadInventoryFromCli"),
+        loadOpenCodeSkills: unused("loadOpenCodeSkills"),
+        loadSkillsFromCli: unused("loadSkillsFromCli"),
+      };
+      const instanceId = ProviderInstanceId.make("opencode");
+      const threadId = ThreadId.make("thread-opencode-resume-web-rules");
+      const modelSelection = { instanceId, model: "default" };
+      // Each provider session reads the web provider when it opens.
+      const resumeWith = (nativeWebToolsDisabled: boolean) =>
+        Effect.gen(function* () {
+          McpProviderSession.setMcpProviderSession({
+            environmentId: EnvironmentId.make("environment-opencode-resume"),
+            threadId,
+            providerSessionId: "mcp-session-opencode-resume",
+            providerInstanceId: instanceId,
+            endpoint: "http://127.0.0.1:43123/mcp",
+            authorizationHeader: "Bearer secret-opencode-token",
+            browserToolsAvailable: true,
+            nativeWebToolsDisabled,
+          });
+          const session = yield* adapter.openSession({
+            threadId,
+            providerSessionId: ProviderSessionId.make(
+              `provider-session-opencode-resume-${nativeWebToolsDisabled}`,
+            ),
+            modelSelection,
+            runtimePolicy: runtimePolicy("full-access"),
+          });
+          const now = yield* DateTime.now;
+          // The path ProviderTurnStartService takes for an existing conversation.
+          yield* session.resumeThread({
+            threadId,
+            modelSelection,
+            runtimePolicy: runtimePolicy("full-access"),
+            providerThread: {
+              id: ProviderThreadId.make("thread:provider:opencode:native-thread:ses_existing"),
+              driver: OPENCODE_PROVIDER,
+              providerInstanceId: instanceId,
+              providerSessionId: null,
+              appThreadId: threadId,
+              ownerNodeId: null,
+              nativeThreadRef: {
+                driver: OPENCODE_PROVIDER,
+                nativeId: "ses_existing",
+                strength: "strong",
+              },
+              nativeConversationHeadRef: null,
+              status: "not_loaded",
+              firstRunOrdinal: 1,
+              lastRunOrdinal: 1,
+              handoffIds: [],
+              forkedFrom: null,
+              createdAt: now,
+              updatedAt: now,
+            },
+          });
+          return updates.at(-1)!;
+        });
+      yield* Effect.addFinalizer(() =>
+        Effect.sync(() => McpProviderSession.clearMcpProviderSession(threadId)),
+      );
+      const adapter = makeOpenCodeAdapterV2({
+        instanceId,
+        settings: OPENCODE_TEST_SETTINGS,
+        environment: {},
+        runtime,
+        idAllocator,
+        serverConfig,
+      });
+
+      // Built-in → Firecrawl: OpenCode's own web tools are denied on reopen.
+      const disabled = yield* resumeWith(true);
+      assert.equal(disabled.sessionID, "ses_existing");
+      assert.equal(permissionAction(disabled.permission, "websearch"), "deny");
+      assert.equal(permissionAction(disabled.permission, "webfetch"), "deny");
+      // Firecrawl → Built-in: they are allowed again, not left denied.
+      const restored = yield* resumeWith(false);
+      assert.equal(permissionAction(restored.permission, "websearch"), "allow");
+      assert.equal(permissionAction(restored.permission, "webfetch"), "allow");
+    }).pipe(
+      Effect.scoped,
+      Effect.provide(
+        Layer.mergeAll(
+          IdAllocator.layer,
+          ServerConfig.layerTest(process.cwd(), {
+            prefix: "t3-opencode-v2-adapter-",
+          }).pipe(Layer.provide(NodeServices.layer)),
+        ),
+      ),
+    ),
+  );
+
   it.effect("adopts the handed-over provider thread identity on session create", () =>
     Effect.gen(function* () {
       const idAllocator = yield* IdAllocator.IdAllocatorV2;
@@ -2514,6 +2658,17 @@ describe("OpenCodeAdapterV2", () => {
     assert.equal(openCodeToolProjectionKind("codesearch"), "web_search");
     assert.equal(openCodeToolProjectionKind("todowrite"), "dynamic_tool");
     assert.equal(openCodeToolProjectionKind("custom_tool"), "dynamic_tool");
+  });
+
+  it("denies OpenCode's own web tools while a T3 web provider is selected, even with full access", () => {
+    const fullAccess = openCodePermissionRules(runtimePolicy("full-access"), true);
+    assert.equal(permissionAction(fullAccess, "websearch"), "deny");
+    assert.equal(permissionAction(fullAccess, "webfetch"), "deny");
+    assert.equal(permissionAction(fullAccess, "bash"), "allow");
+    assert.equal(
+      permissionAction(openCodePermissionRules(runtimePolicy("full-access")), "websearch"),
+      "allow",
+    );
   });
 
   it("maps runtime modes to safe OpenCode permission rules", () => {

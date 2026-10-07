@@ -53,6 +53,7 @@ import * as ServerConfig from "../../config.ts";
 import * as McpProviderSession from "../../mcp/McpProviderSession.ts";
 import { PreviewControlsToolkit } from "../../mcp/toolkits/previewControls/tools.ts";
 import { HtmlToolkit } from "../../mcp/toolkits/html/tools.ts";
+import { WebToolkit } from "../../mcp/toolkits/web/tools.ts";
 import { EnvironmentToolkit } from "../../mcp/toolkits/environment/tools.ts";
 import { ProjectToolkit } from "../../mcp/toolkits/project/tools.ts";
 import { WorktreeToolkit } from "../../mcp/toolkits/worktree/tools.ts";
@@ -499,6 +500,50 @@ describe("ClaudeAdapterV2 MCP query overrides", () => {
     }
   };
 
+  it("removes Claude's own web tools while a T3 web provider is selected", () => {
+    const threadId = ThreadId.make("thread-claude-mcp-web-provider");
+    McpProviderSession.setMcpProviderSession({
+      environmentId: EnvironmentId.make(`environment-${threadId}`),
+      threadId,
+      providerSessionId: `mcp-session-${threadId}`,
+      providerInstanceId: ProviderInstanceId.make("claudeAgent"),
+      endpoint: "http://127.0.0.1:43123/mcp",
+      authorizationHeader: "Bearer secret-claude-token",
+      browserToolsAvailable: true,
+      nativeWebToolsDisabled: true,
+    });
+    try {
+      const overrides = ClaudeAdapterV2.claudeMcpQueryOverrides({
+        threadId,
+        readOnlySandbox: false,
+      });
+      assert.deepEqual(overrides.disallowedTools, ["WebSearch", "WebFetch"]);
+      // The live query must reopen when the web provider changes.
+      const queryPolicy = ClaudeAdapterV2.claudeRuntimeQueryPolicyForRuntimePolicy(
+        ProviderAdapterV2RuntimePolicy.make({
+          runtimeMode: "full-access",
+          interactionMode: "default",
+          cwd: "/workspace",
+        }),
+      );
+      const { disallowedTools: _removed, ...withNativeWebTools } = overrides;
+      assert.notEqual(
+        ClaudeAdapterV2.claudeEffectiveQueryPolicyKey(queryPolicy, overrides),
+        ClaudeAdapterV2.claudeEffectiveQueryPolicyKey(queryPolicy, withNativeWebTools),
+      );
+    } finally {
+      McpProviderSession.clearMcpProviderSession(threadId);
+    }
+  });
+
+  it("keeps Claude's own web tools when no MCP session exists", () => {
+    const overrides = ClaudeAdapterV2.claudeMcpQueryOverrides({
+      threadId: ThreadId.make("thread-claude-no-mcp-web-tools"),
+      readOnlySandbox: false,
+    });
+    assert.isUndefined(overrides.disallowedTools);
+  });
+
   it("leaves an absent allowlist absent when no MCP session exists", () => {
     const overrides = ClaudeAdapterV2.claudeMcpQueryOverrides({
       threadId: ThreadId.make("thread-claude-no-mcp-no-allowlist"),
@@ -657,6 +702,7 @@ describe("ClaudeAdapterV2 MCP query overrides", () => {
       ...Object.values(EnvironmentToolkit.tools),
       ...Object.values(PreviewControlsToolkit.tools),
       ...Object.values(HtmlToolkit.tools),
+      ...Object.values(WebToolkit.tools),
     ]
       .filter((tool) => Context.get(tool.annotations, Tool.Readonly))
       .map((tool) => `mcp__t3-code__${tool.name}`)
