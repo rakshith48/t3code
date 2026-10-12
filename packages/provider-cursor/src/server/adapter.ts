@@ -330,6 +330,7 @@ export function makeCursorAgentOptions(input: {
 }): AgentOptions {
   const policy = cursorRuntimeAgentPolicy(input.runtimePolicy);
   const mcpServers = cursorMcpServers(input.mcpSession);
+  const nativeWebToolsDisabled = input.mcpSession?.nativeWebToolsDisabled === true;
   return {
     model: cursorSdkModelSelection(input.modelSelection),
     name: `T3 Code ${input.threadId}`,
@@ -343,8 +344,12 @@ export function makeCursorAgentOptions(input: {
         enabled: policy.sandboxEnabled,
       },
       enableAgentRetries: true,
+      // Task children only receive the parent's tool exclusions when this is set.
+      ...(nativeWebToolsDisabled ? { subagentInherit: {} } : {}),
     },
     ...(mcpServers === undefined ? {} : { mcpServers }),
+    // Not persisted by the SDK, so every create and resume passes it again.
+    ...(nativeWebToolsDisabled ? { disallowedTools: ["webSearch", "webFetch"] } : {}),
   };
 }
 

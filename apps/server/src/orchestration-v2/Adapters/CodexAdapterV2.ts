@@ -1336,6 +1336,8 @@ export function codexThreadRuntimeParams(input: {
               config: tools.disabledSkills.map((name) => ({ name, enabled: false })),
             },
           }),
+      // Codex has one web tool; opening and reading pages are actions of the same search.
+      ...(mcpSession?.nativeWebToolsDisabled === true ? { web_search: "disabled" } : {}),
     },
   };
 }

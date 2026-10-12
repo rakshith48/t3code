@@ -56,6 +56,7 @@ import * as McpProviderSession from "@t3tools/provider-core/server/mcpSession";
 import * as McpProviderSessions from "@t3tools/provider-core/server/McpProviderSessions";
 import { PreviewControlsToolkit } from "../../mcp/toolkits/previewControls/tools.ts";
 import { HtmlToolkit } from "../../mcp/toolkits/html/tools.ts";
+import { WebToolkit } from "../../mcp/toolkits/web/tools.ts";
 import { EnvironmentToolkit } from "../../mcp/toolkits/environment/tools.ts";
 import { ProjectToolkit } from "../../mcp/toolkits/project/tools.ts";
 import { WorktreeToolkit } from "../../mcp/toolkits/worktree/tools.ts";
@@ -497,6 +498,38 @@ describe("ClaudeAdapterV2 MCP query overrides", () => {
     browserToolsAvailable: true,
   });
 
+  it("removes Claude's own web tools while a T3 web provider is selected", () => {
+    const threadId = ThreadId.make("thread-claude-mcp-web-provider");
+    const overrides = ClaudeAdapterV2.claudeMcpQueryOverrides({
+      mcpSession: { ...mcpSessionFor(threadId), nativeWebToolsDisabled: true },
+      readOnlySandbox: false,
+    });
+    assert.deepEqual(overrides.disallowedTools, ["WebSearch", "WebFetch"]);
+    // The live query must reopen when the web provider changes.
+    const queryPolicy = ClaudeAdapterV2.claudeRuntimeQueryPolicyForRuntimePolicy(
+      CLAUDE_TEST_RUNTIME_POLICY,
+    );
+    const { disallowedTools: _removed, ...withNativeWebTools } = overrides;
+    assert.notEqual(
+      ClaudeAdapterV2.claudeEffectiveQueryPolicyKey(queryPolicy, overrides),
+      ClaudeAdapterV2.claudeEffectiveQueryPolicyKey(queryPolicy, withNativeWebTools),
+    );
+    assert.isUndefined(
+      ClaudeAdapterV2.claudeMcpQueryOverrides({
+        mcpSession: mcpSessionFor(threadId),
+        readOnlySandbox: false,
+      }).disallowedTools,
+    );
+  });
+
+  it("keeps Claude's own web tools when no MCP session exists", () => {
+    const overrides = ClaudeAdapterV2.claudeMcpQueryOverrides({
+      mcpSession: undefined,
+      readOnlySandbox: false,
+    });
+    assert.isUndefined(overrides.disallowedTools);
+  });
+
   it("leaves an absent allowlist absent when no MCP session exists", () => {
     const overrides = ClaudeAdapterV2.claudeMcpQueryOverrides({
       mcpSession: undefined,
@@ -737,6 +770,7 @@ describe("ClaudeAdapterV2 MCP query overrides", () => {
       ...Object.values(EnvironmentToolkit.tools),
       ...Object.values(PreviewControlsToolkit.tools),
       ...Object.values(HtmlToolkit.tools),
+      ...Object.values(WebToolkit.tools),
     ]
       .filter((tool) => Context.get(tool.annotations, Tool.Readonly))
       .map((tool) => `mcp__t3-code__${tool.name}`)

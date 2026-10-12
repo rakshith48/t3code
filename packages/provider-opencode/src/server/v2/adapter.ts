@@ -522,6 +522,7 @@ const sessionRules = (
   grants: ReadonlyArray<Rule>,
   mcpServerName: string | null,
   userMcpPrefix: string | null = null,
+  nativeWebToolsDisabled = false,
 ): ReadonlyArray<Rule> => [
   ...(policy.runtimeMode === "full-access"
     ? [rule("*", "allow")]
@@ -534,6 +535,8 @@ const sessionRules = (
   // Plan mode writes only its plan, which `paths` allows again. Shell and read
   // are never denied: the free tier refuses sessions whose rules deny them.
   ...(policy.interactionMode === "plan" ? [rule("edit", "deny")] : []),
+  // OpenCode's own web tools give way to t3-code's while a web provider is selected.
+  ...(nativeWebToolsDisabled ? [rule("websearch", "deny"), rule("webfetch", "deny")] : []),
   ...paths,
   ...mcpRules(mcpServerName, userMcpPrefix),
 ];
@@ -3035,16 +3038,17 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
         policy.runtimeMode === "full-access" && !plan
           ? []
           : yield* pathsFor(thread.directory, plan ? [thread.agent, "plan"] : [thread.agent]);
+      const mcpSession =
+        appThreadId === null ? undefined : yield* mcpSessions.read(ThreadId.make(appThreadId));
       // Only a thread with servers of its own gets the allow rule for them.
-      const hasUserMcp =
-        appThreadId !== null &&
-        ((yield* mcpSessions.read(ThreadId.make(appThreadId)))?.tools?.servers.length ?? 0) > 0;
+      const hasUserMcp = (mcpSession?.tools?.servers.length ?? 0) > 0;
       return sessionRules(
         policy,
         paths,
         policy.runtimeMode === "full-access" ? [] : thread.grants,
         appThreadId === null ? null : yield* mcpServerNameFor(appThreadId),
-        hasUserMcp ? yield* userMcpPrefixFor(appThreadId) : null,
+        hasUserMcp && appThreadId !== null ? yield* userMcpPrefixFor(appThreadId) : null,
+        !connection.external && mcpSession?.nativeWebToolsDisabled === true,
       );
     });
 

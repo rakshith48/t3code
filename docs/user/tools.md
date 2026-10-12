@@ -1,7 +1,7 @@
-# Skills and MCP servers
+# Skills, MCP servers and web
 
-**Settings → Tools** controls what agents can use on an environment: the skills they load and the
-MCP servers T3 Code gives them. Pick a project in the settings crumb to change them for that
+**Settings → Tools** controls what agents can use on an environment: the skills they load, the
+MCP servers T3 Code gives them, and the service behind its web tools. Pick a project in the settings crumb to change them for that
 project only. Changes apply when an agent session next starts; use **Restart agent session** in the
 command palette to pick them up in an open thread.
 
@@ -37,3 +37,17 @@ account. Inherited servers can be switched off for the project without removing 
 
 Claude, Codex, Cursor, OpenCode, Grok and other ACP agents get these servers. ACP agents that don't
 support URL servers only get command servers. Pi isn't supported yet.
+
+## Web
+
+The **Web** tab picks the service behind `web_search` and `web_fetch`, two tools T3 Code gives every
+agent. It starts at **Built-in**: each agent uses its own web search and fetch, as before, and
+T3 Code's tools stay off. The choice applies to the whole environment.
+
+Pick [Firecrawl](https://docs.firecrawl.dev), Exa or Tavily to turn T3 Code's tools on. Firecrawl
+works without an API key on eligible networks; a key raises its rate limits. Exa and Tavily need
+their API key. Keys are stored on the environment and never shown again after you save them.
+
+While a service is selected, Claude, Codex, Cursor and OpenCode lose their own web search and fetch,
+so every search goes through it. Other agents keep their own web tools and are asked to prefer
+T3 Code's.

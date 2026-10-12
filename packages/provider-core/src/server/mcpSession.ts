@@ -52,6 +52,12 @@ export interface McpProviderSessionConfig {
   readonly agentDeviceEnvironment?: Readonly<Record<string, string>>;
   /** Servers and skill switches from Settings → Tools; absent means none. */
   readonly tools?: McpProviderSessionTools;
+  /**
+   * Set while a web provider other than Built-in is selected in Settings →
+   * Web. Adapters then turn off the CLI's own web search and fetch so the
+   * agent uses T3's `web_search` and `web_fetch` instead.
+   */
+  readonly nativeWebToolsDisabled?: boolean;
 }
 
 /** Provider env with the device variables applied over `base`, or `base` untouched. */

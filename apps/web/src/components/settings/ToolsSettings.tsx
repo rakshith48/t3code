@@ -38,6 +38,7 @@ import { McpServerDialog } from "./McpServerDialog";
 import { useSettingsScope } from "./SettingsScopeContext";
 import { SettingsPageContainer, SettingsRow, SettingsSection } from "./settingsLayout";
 import { searchableSetting } from "./settingsSearch";
+import { WebToolsPanel } from "./WebSettings";
 import {
   collectSkillRows,
   filterSkillRows,
@@ -188,14 +189,15 @@ export function ToolsSettings({
           value={[tab]}
           onValueChange={(next) => {
             const value = next[0];
-            if (value === "skills" || value === "mcp") selectTab(value);
+            if (value === "skills" || value === "mcp" || value === "web") selectTab(value);
           }}
         >
           <Toggle value="skills">Skills</Toggle>
           <Toggle value="mcp">MCP servers</Toggle>
+          <Toggle value="web">Web</Toggle>
         </ToggleGroup>
       </div>
-      {tab === "mcp" ? <McpServersPanel /> : <SkillsPanel />}
+      {tab === "mcp" ? <McpServersPanel /> : tab === "web" ? <WebToolsPanel /> : <SkillsPanel />}
     </SettingsPageContainer>
   );
 }
