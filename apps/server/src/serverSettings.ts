@@ -173,6 +173,12 @@ const BITBUCKET_SECRET_FIELDS = ["accessToken", "apiToken"] as const;
 function gitHubTokenSecretName(host: string): string {
   return `github-token-${Buffer.from(host.trim().toLowerCase(), "utf8").toString("base64url")}`;
 }
+const WEB_SECRET_NAMES = {
+  firecrawlApiKey: "web-firecrawl-api-key",
+  exaApiKey: "web-exa-api-key",
+  tavilyApiKey: "web-tavily-api-key",
+} as const;
+const WEB_SECRET_FIELDS = ["firecrawlApiKey", "exaApiKey", "tavilyApiKey"] as const;
 
 const redactSecret = (value: string) => (value.length > 0 ? SECRET_REDACTED : "");
 
@@ -223,12 +229,19 @@ export function redactServerSettingsForClient(settings: ServerSettings): ServerS
       Object.entries(settings.github.tokens).map(([host, token]) => [host, redactSecret(token)]),
     ),
   };
+  const web = {
+    ...settings.web,
+    firecrawlApiKey: redactSecret(settings.web.firecrawlApiKey),
+    exaApiKey: redactSecret(settings.web.exaApiKey),
+    tavilyApiKey: redactSecret(settings.web.tavilyApiKey),
+  };
   return redactMcpServerSecrets({
     ...settings,
     providerInstances,
     usageLimitSources,
     bitbucket,
     github,
+    web,
   });
 }
 
@@ -781,6 +794,31 @@ const make = Effect.gen(function* () {
       return moved ? { ...settings, bitbucket, github: { ...settings.github, tokens } } : settings;
     });
 
+  /** Same as `moveInlineBitbucketTokens`, for web provider API keys. */
+  const moveInlineWebApiKeys = (settings: ServerSettings) =>
+    Effect.gen(function* () {
+      const web = { ...settings.web };
+      let moved = false;
+      for (const field of WEB_SECRET_FIELDS) {
+        const value = web[field];
+        if (value.length === 0 || value === SECRET_REDACTED) continue;
+        const stored = yield* secretStore
+          .set(WEB_SECRET_NAMES[field], textEncoder.encode(value))
+          .pipe(
+            Effect.as(true),
+            Effect.catch(() =>
+              Effect.logWarning("failed to move a web API key into the secret store", {
+                field,
+              }).pipe(Effect.as(false)),
+            ),
+          );
+        if (!stored) continue;
+        web[field] = SECRET_REDACTED;
+        moved = true;
+      }
+      return moved ? { ...settings, web } : settings;
+    });
+
   const loadSettingsFromDisk = Effect.gen(function* () {
     let settings = DEFAULT_SERVER_SETTINGS;
     let legacyProviders: Readonly<Record<string, unknown>> | undefined;
@@ -868,7 +906,9 @@ const make = Effect.gen(function* () {
       ? foldLegacyProjectSettings(loaded, legacyProjectRows)
       : loaded;
     // Only rewrite a file that decoded cleanly; an untrusted one stays for the user to repair.
-    const migrated = settingsFileTrusted ? yield* moveInlineBitbucketTokens(folded) : folded;
+    const migrated = settingsFileTrusted
+      ? yield* moveInlineWebApiKeys(yield* moveInlineBitbucketTokens(folded))
+      : folded;
     // A file still carrying the retired `providers` map is rewritten once so
     // the migrated instances persist and the old key disappears.
     if (migrated !== loaded || (settingsFileTrusted && legacyProviders !== undefined)) {
@@ -972,6 +1012,18 @@ const make = Effect.gen(function* () {
           );
         tokens[host] = Option.isSome(secret) ? textDecoder.decode(secret.value) : "";
       }
+      const web = { ...settings.web };
+      for (const field of WEB_SECRET_FIELDS) {
+        if (web[field] !== SECRET_REDACTED) continue;
+        const secret = yield* secretStore
+          .get(WEB_SECRET_NAMES[field])
+          .pipe(
+            Effect.mapError(
+              (cause) => new ServerSettingsError({ settingsPath, operation: "read-secret", cause }),
+            ),
+          );
+        web[field] = Option.isSome(secret) ? textDecoder.decode(secret.value) : "";
+      }
       const mcpSecrets = new Map<string, string>();
       for (const secretName of mcpServerSecretNames(settings)) {
         const secret = yield* secretStore
@@ -990,6 +1042,7 @@ const make = Effect.gen(function* () {
           usageLimitSources: usageLimitSources as ServerSettings["usageLimitSources"],
           bitbucket,
           github: { ...settings.github, tokens },
+          web,
         },
         mcpSecrets,
       );
@@ -1187,6 +1240,24 @@ const make = Effect.gen(function* () {
         });
       }
 
+      const web = { ...next.web };
+      for (const field of WEB_SECRET_FIELDS) {
+        let value = web[field];
+        if (value === SECRET_REDACTED) {
+          // The marker keeps what is saved; a hand-edited plaintext key moves into the store.
+          const inline = current.web[field];
+          if (inline === SECRET_REDACTED || inline.length === 0) continue;
+          value = inline;
+        }
+        const secretName = WEB_SECRET_NAMES[field];
+        if (value.length === 0) {
+          changes.push({ kind: "remove", secretName, operation: "remove-secret" });
+          continue;
+        }
+        changes.push({ kind: "write", secretName, value: textEncoder.encode(value) });
+        web[field] = SECRET_REDACTED;
+      }
+
       const mcp = planMcpServerSecrets(current, next);
       for (const change of mcp.changes) {
         changes.push(
@@ -1209,6 +1280,7 @@ const make = Effect.gen(function* () {
           usageLimitSources: usageLimitSources as ServerSettings["usageLimitSources"],
           bitbucket,
           github: { ...next.github, tokens },
+          web,
         },
         changes,
       };

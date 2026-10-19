@@ -36,6 +36,14 @@ ACP fallback: some ACP agents accept the injected MCP server but fail to expose 
 When a chart, table, diagram, image collage, or mockup would say more than prose, build a self-contained HTML page, check it with \`html_preview\`, then publish it with \`html_render\` before your final reply. The reader sees the page above that reply, so don't announce or restate it; add only what it doesn't say.
 `;
 
+/**
+ * Sent only while a web provider other than Built-in is selected. Agents keep
+ * their own web tools as the fallback; this asks them to try T3 Code's first.
+ */
+export const T3_CODE_WEB_TOOL_INSTRUCTIONS = `## T3 Code web tools
+
+The user picked a web provider for this environment. Use \`web_search\` to search the web and \`web_fetch\` to read a page, before your own web search and fetch tools. If a call fails or reports that T3 Code web tools are off, use your own web tools instead.`;
+
 export const T3_CODE_BROWSER_TOOL_INSTRUCTIONS = `
 
 ## T3 Code collaborative browser
@@ -63,6 +71,8 @@ Investigate with read-only actions and do not edit files or otherwise execute th
 export interface T3AcpInstructionState {
   readonly interactionMode: ProviderInteractionMode;
   readonly hasT3Mcp: boolean;
+  /** Set while a web provider other than Built-in is selected in Settings → Web. */
+  readonly webToolsPreferred?: boolean;
 }
 
 /**
@@ -78,7 +88,8 @@ export function t3AcpPromptWithInstructions(input: {
   if (input.prompt.trimStart().startsWith("/")) return input.prompt;
   if (
     input.previousState?.interactionMode === input.state.interactionMode &&
-    input.previousState.hasT3Mcp === input.state.hasT3Mcp
+    input.previousState.hasT3Mcp === input.state.hasT3Mcp &&
+    (input.previousState.webToolsPreferred ?? false) === (input.state.webToolsPreferred ?? false)
   ) {
     return input.prompt;
   }
@@ -89,6 +100,9 @@ export function t3AcpPromptWithInstructions(input: {
     ...(input.state.hasT3Mcp
       ? [T3_CODE_BROWSER_TOOL_INSTRUCTIONS.trim(), T3_CODE_ORCHESTRATION_INSTRUCTIONS.trim()]
       : []),
+    ...(input.state.hasT3Mcp && input.state.webToolsPreferred === true
+      ? [T3_CODE_WEB_TOOL_INSTRUCTIONS]
+      : []),
   ];
   return `<t3_code_instructions>\n${instructions.join("\n\n")}\n</t3_code_instructions>\n\n<user_request>\n${input.prompt}\n</user_request>`;
 }
@@ -98,20 +112,30 @@ export function t3AcpPromptWithInstructions(input: {
  * context in the first prompt. Keep the wrapper explicit so it cannot be
  * mistaken for text authored by the user.
  */
-function prependT3OrchestrationInstructions(prompt: string): string {
-  return `<t3_code_orchestration_instructions>${T3_CODE_ORCHESTRATION_INSTRUCTIONS.trim()}</t3_code_orchestration_instructions>\n\n<user_request>\n${prompt}\n</user_request>`;
+function prependT3OrchestrationInstructions(prompt: string, webToolsPreferred: boolean): string {
+  const instructions = webToolsPreferred
+    ? `${T3_CODE_ORCHESTRATION_INSTRUCTIONS.trim()}\n\n${T3_CODE_WEB_TOOL_INSTRUCTIONS}`
+    : T3_CODE_ORCHESTRATION_INSTRUCTIONS.trim();
+  return `<t3_code_orchestration_instructions>${instructions}</t3_code_orchestration_instructions>\n\n<user_request>\n${prompt}\n</user_request>`;
 }
 
 export function t3OrchestrationPromptForFirstRun(input: {
   readonly prompt: string;
   readonly runOrdinal: number;
   readonly hasT3Mcp: boolean;
+  readonly webToolsPreferred?: boolean;
 }): string {
   return input.runOrdinal === 1 && input.hasT3Mcp
-    ? prependT3OrchestrationInstructions(input.prompt)
+    ? prependT3OrchestrationInstructions(input.prompt, input.webToolsPreferred === true)
     : input.prompt;
 }
 
-export function t3OrchestrationSystemPrompt(hasT3Mcp: boolean): string | undefined {
-  return hasT3Mcp ? T3_CODE_ORCHESTRATION_INSTRUCTIONS : undefined;
+export function t3OrchestrationSystemPrompt(
+  hasT3Mcp: boolean,
+  webToolsPreferred = false,
+): string | undefined {
+  if (!hasT3Mcp) return undefined;
+  return webToolsPreferred
+    ? `${T3_CODE_ORCHESTRATION_INSTRUCTIONS}\n${T3_CODE_WEB_TOOL_INSTRUCTIONS}\n`
+    : T3_CODE_ORCHESTRATION_INSTRUCTIONS;
 }

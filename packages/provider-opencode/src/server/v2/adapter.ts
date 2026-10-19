@@ -3430,7 +3430,11 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
       yield* prepareUserMcp(state, turnInput.threadId, directory, mcpSession);
       const instructions = [
         buildRuntimeInstructions({ harness: "OpenCode", model: turnInput.modelSelection.model }),
-        t3OrchestrationSystemPrompt(state.mcp !== undefined),
+        // OpenCode keeps its own web tools as the fallback.
+        t3OrchestrationSystemPrompt(
+          state.mcp !== undefined,
+          mcpSession?.webToolsPreferred === true,
+        ),
       ]
         .filter((part) => part !== undefined && part.length > 0)
         .join("\n\n");
