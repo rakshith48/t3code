@@ -6829,7 +6829,7 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
             hasT3Mcp: (yield* readMcpContext(turnInput.threadId)).servers.length > 0,
             // ACP agents keep their own web tools, so they are only steered to T3's.
             webToolsPreferred:
-              (yield* mcpSessions.read(turnInput.threadId))?.nativeWebToolsDisabled === true,
+              (yield* mcpSessions.read(turnInput.threadId))?.webToolsPreferred === true,
           } satisfies T3AcpInstructionState;
           const previousInstructionState = (yield* Ref.get(promptInstructionStates)).get(sessionId);
           const messageText = providerMessageTextWithAttachmentPaths({

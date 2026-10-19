@@ -48,6 +48,6 @@ Pick [Firecrawl](https://docs.firecrawl.dev), Exa or Tavily to turn T3 Code's to
 works without an API key on eligible networks; a key raises its rate limits. Exa and Tavily need
 their API key. Keys are stored on the environment and never shown again after you save them.
 
-While a service is selected, Claude, Codex, Cursor and OpenCode lose their own web search and fetch,
-so every search goes through it. Other agents keep their own web tools and are asked to prefer
-T3 Code's.
+While a service is selected, every agent is asked to use T3 Code's web tools first. Agents keep their
+own web search and fetch, and use them when T3 Code's fail, for example when the service is down or
+out of credits. A change applies when an agent session next starts.

@@ -1882,13 +1882,13 @@ it.effect(
         enableAgentBrowserAccess: true,
         projectOverride: true,
       });
-      assert.equal(byDefault?.nativeWebToolsDisabled, false);
+      assert.equal(byDefault?.webToolsPreferred, false);
       const firecrawl = yield* runBrowserAccessScenario({
         enableAgentBrowserAccess: true,
         projectOverride: true,
         webProvider: "firecrawl",
       });
-      assert.equal(firecrawl?.nativeWebToolsDisabled, true);
+      assert.equal(firecrawl?.webToolsPreferred, true);
     }),
 );
 

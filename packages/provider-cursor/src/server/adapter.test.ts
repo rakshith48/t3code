@@ -870,35 +870,6 @@ describe("CursorAdapterV2", () => {
     }
   });
 
-  it("removes Cursor's own web tools while a T3 web provider is selected", () => {
-    const threadId = ThreadId.make("thread-cursor-web-provider");
-    const options = (nativeWebToolsDisabled: boolean) =>
-      makeCursorAgentOptions({
-        modelSelection: { instanceId: ProviderInstanceId.make("cursor"), model: "composer-2.5" },
-        runtimePolicy: {
-          runtimeMode: "full-access",
-          interactionMode: "default",
-          cwd: "/workspace",
-        },
-        threadId,
-        mcpSession: {
-          environmentId: EnvironmentId.make("environment-cursor-web-provider"),
-          threadId,
-          providerSessionId: "mcp-session-cursor-web",
-          providerInstanceId: ProviderInstanceId.make("cursor"),
-          endpoint: "http://127.0.0.1:43123/mcp",
-          authorizationHeader: "Bearer secret-cursor-mcp-token",
-          browserToolsAvailable: true,
-          nativeWebToolsDisabled,
-        },
-      });
-    assert.deepEqual(options(true).disallowedTools, ["webSearch", "webFetch"]);
-    // Native Task subagents only inherit the exclusions through subagentInherit.
-    assert.deepEqual(options(true).local?.subagentInherit, {});
-    assert.isUndefined(options(false).disallowedTools);
-    assert.isUndefined(options(false).local?.subagentInherit);
-  });
-
   it("injects thread-scoped MCP credentials without logging them", () => {
     const threadId = ThreadId.make("thread-cursor-mcp");
     const mcpSession = {

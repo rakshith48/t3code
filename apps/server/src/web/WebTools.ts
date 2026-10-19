@@ -1,7 +1,7 @@
 /**
  * WebTools - the web search and page fetch behind the `web_search` and
  * `web_fetch` MCP tools. Every call reads the environment's web settings, so a
- * provider or key saved in Settings → Web applies without a restart.
+ * provider or key saved in Settings → Tools → Web applies without a restart.
  *
  * @module WebTools
  */
@@ -11,6 +11,7 @@ import {
   type WebToolProvider,
 } from "@t3tools/contracts";
 import * as Context from "effect/Context";
+import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
@@ -23,6 +24,10 @@ const DEFAULT_WEB_SEARCH_RESULTS = 5;
 /** Page text past this is cut so one long page cannot crowd out the agent's context. */
 export const MAX_WEB_FETCH_CHARS = 40_000;
 const MAX_SNIPPET_CHARS = 500;
+const FIRECRAWL_INTEGRATION = "_t3code";
+const WEB_SEARCH_TIMEOUT = Duration.seconds(30);
+// A scrape renders the page, which takes longer than a search.
+const WEB_FETCH_TIMEOUT = Duration.seconds(60);
 
 type ApiProvider = Exclude<WebToolProvider, "builtin">;
 type WebToolOperation = "search" | "fetch";
@@ -33,12 +38,15 @@ const PROVIDER_LABELS: Record<ApiProvider, string> = {
   tavily: "Tavily",
 };
 
+// Agents keep their own web tools, so a failed call tells them to use those.
+const FALL_BACK = "Use your own web tools for this request.";
+
 class WebToolsDisabledError extends Schema.TaggedError<WebToolsDisabledError>()(
   "WebToolsDisabledError",
   {},
 ) {
   override get message(): string {
-    return "T3 Code web tools are off for this environment. Use your own web tools, or pick a web provider in Settings → Web.";
+    return "T3 Code web tools are off for this environment. Use your own web tools, or pick a web provider in Settings → Tools → Web.";
   }
 }
 
@@ -47,7 +55,7 @@ class WebToolsApiKeyMissingError extends Schema.TaggedError<WebToolsApiKeyMissin
   { provider: Schema.Literals(["exa", "tavily"]) },
 ) {
   override get message(): string {
-    return `Add your ${PROVIDER_LABELS[this.provider]} API key in Settings → Web.`;
+    return `Add your ${PROVIDER_LABELS[this.provider]} API key in Settings → Tools → Web.`;
   }
 }
 
@@ -60,7 +68,7 @@ class WebToolsRequestError extends Schema.TaggedError<WebToolsRequestError>()(
   },
 ) {
   override get message(): string {
-    return `Could not reach ${PROVIDER_LABELS[this.provider]} for web ${this.operation}.`;
+    return `Could not reach ${PROVIDER_LABELS[this.provider]} for web ${this.operation}. ${FALL_BACK}`;
   }
 }
 
@@ -70,16 +78,33 @@ class WebToolsResponseError extends Schema.TaggedError<WebToolsResponseError>()(
     provider: Schema.Literals(["firecrawl", "exa", "tavily"]),
     operation: Schema.Literals(["search", "fetch"]),
     status: Schema.Number,
+    /** Sent without an API key, on Firecrawl's keyless tier. */
+    keyless: Schema.Boolean,
   },
 ) {
   override get message(): string {
+    const label = PROVIDER_LABELS[this.provider];
     const hint =
-      this.status === 401 || this.status === 403
-        ? " Check the API key in Settings → Web."
-        : this.status === 402 || this.status === 429
-          ? " The account is out of credits or rate limited."
-          : "";
-    return `${PROVIDER_LABELS[this.provider]} web ${this.operation} failed with HTTP ${this.status}.${hint}`;
+      this.keyless && (this.status === 401 || this.status === 403)
+        ? ` ${label}'s keyless tier refused this network, as it does on datacenter, VPN and CI networks; an API key in Settings → Tools → Web avoids that.`
+        : this.status === 401 || this.status === 403
+          ? " Check the API key in Settings → Tools → Web."
+          : this.status === 402 || this.status === 429
+            ? " The account is out of credits or rate limited."
+            : "";
+    return `${label} web ${this.operation} failed with HTTP ${this.status}.${hint} ${FALL_BACK}`;
+  }
+}
+
+class WebToolsTimeoutError extends Schema.TaggedError<WebToolsTimeoutError>()(
+  "WebToolsTimeoutError",
+  {
+    provider: Schema.Literals(["firecrawl", "exa", "tavily"]),
+    operation: Schema.Literals(["search", "fetch"]),
+  },
+) {
+  override get message(): string {
+    return `${PROVIDER_LABELS[this.provider]} web ${this.operation} did not answer in time. ${FALL_BACK}`;
   }
 }
 
@@ -109,6 +134,7 @@ export type WebToolsError =
   | WebToolsApiKeyMissingError
   | WebToolsRequestError
   | WebToolsResponseError
+  | WebToolsTimeoutError
   | WebToolsResponseDecodeError
   | WebFetchEmptyError;
 
@@ -222,33 +248,55 @@ const make = Effect.gen(function* () {
     body: unknown,
     schema: S,
   ): Effect.Effect<S["Type"], WebToolsError, S["DecodingServices"]> =>
-    httpClient
-      .execute(
-        HttpClientRequest.post(url).pipe(
-          HttpClientRequest.acceptJson,
-          HttpClientRequest.setHeaders(headers),
-          HttpClientRequest.bodyJsonUnsafe(body),
-        ),
-      )
-      .pipe(
-        Effect.mapError((cause) => new WebToolsRequestError({ provider, operation, cause })),
-        Effect.flatMap(
-          HttpClientResponse.matchStatus({
-            "2xx": (success) =>
-              HttpClientResponse.schemaBodyJson(schema)(success).pipe(
-                Effect.mapError(
-                  (cause) => new WebToolsResponseDecodeError({ provider, operation, cause }),
+    // A provider that hangs must not stall the agent's turn.
+    timeoutWith(
+      provider,
+      operation,
+    )(
+      httpClient
+        .execute(
+          HttpClientRequest.post(url).pipe(
+            HttpClientRequest.acceptJson,
+            HttpClientRequest.setHeaders(headers),
+            HttpClientRequest.bodyJsonUnsafe(body),
+          ),
+        )
+        .pipe(
+          Effect.mapError((cause) => new WebToolsRequestError({ provider, operation, cause })),
+          Effect.flatMap(
+            HttpClientResponse.matchStatus({
+              "2xx": (success) =>
+                HttpClientResponse.schemaBodyJson(schema)(success).pipe(
+                  Effect.mapError(
+                    (cause) => new WebToolsResponseDecodeError({ provider, operation, cause }),
+                  ),
                 ),
-              ),
-            orElse: (failed) =>
-              Effect.fail(
-                new WebToolsResponseError({ provider, operation, status: failed.status }),
-              ),
-          }),
+              orElse: (failed) =>
+                Effect.fail(
+                  new WebToolsResponseError({
+                    provider,
+                    operation,
+                    status: failed.status,
+                    keyless: !("authorization" in headers) && !("x-api-key" in headers),
+                  }),
+                ),
+            }),
+          ),
         ),
+    );
+
+  const timeoutWith =
+    (provider: ApiProvider, operation: WebToolOperation) =>
+    <A, E, R>(effect: Effect.Effect<A, E, R>) =>
+      effect.pipe(
+        Effect.timeoutOrElse({
+          duration: operation === "search" ? WEB_SEARCH_TIMEOUT : WEB_FETCH_TIMEOUT,
+          orElse: () => Effect.fail(new WebToolsTimeoutError({ provider, operation })),
+        }),
       );
 
   // Firecrawl works without a key on eligible networks, so it never needs one here.
+  // Its `integration` field is a closed list; an `_` prefix marks an unlisted caller.
   const firecrawlHeaders = (key: string): Record<string, string> =>
     key.length > 0 ? { authorization: `Bearer ${key}` } : {};
 
@@ -273,7 +321,7 @@ const make = Effect.gen(function* () {
           "search",
           "https://api.firecrawl.dev/v2/search",
           firecrawlHeaders(settings.firecrawlApiKey),
-          { query, limit },
+          { query, limit, integration: FIRECRAWL_INTEGRATION },
           FirecrawlSearchResponse,
         ).pipe(
           Effect.map((response) =>
@@ -329,7 +377,13 @@ const make = Effect.gen(function* () {
           firecrawlHeaders(settings.firecrawlApiKey),
           // Firecrawl serves cached pages up to two days old by default; agents
           // fetch to read the page as it is now (a package's latest version, docs).
-          { url, formats: ["markdown"], onlyMainContent: true, maxAge: 0 },
+          {
+            url,
+            formats: ["markdown"],
+            onlyMainContent: true,
+            maxAge: 0,
+            integration: FIRECRAWL_INTEGRATION,
+          },
           FirecrawlScrapeResponse,
         ).pipe(
           Effect.flatMap(({ data }) =>

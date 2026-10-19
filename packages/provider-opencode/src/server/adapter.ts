@@ -619,28 +619,16 @@ const OPENCODE_RESTRICTED_PERMISSIONS = [
 export function openCodePermissionRules(
   runtimePolicy: ProviderAdapter.ProviderAdapterV2RuntimePolicy,
   disabledSkills: ReadonlyArray<string> = [],
-  nativeWebToolsDisabled = false,
 ): PermissionRuleset {
-  // Skills switched off in Settings → Tools, then OpenCode's own web tools while
-  // a web provider is selected; the last matching rule wins, so these follow
-  // every allow below, including full access.
+  // Skills switched off in Settings → Tools; the last matching rule wins, so
+  // these follow every allow below.
   const skillRules = disabledSkills.map((name) => ({
     permission: "skill",
     pattern: name,
     action: "deny" as const,
   }));
-  const webRules = nativeWebToolsDisabled
-    ? OPENCODE_NATIVE_WEB_PERMISSIONS.map((permission) => ({
-        permission,
-        pattern: "*",
-        action: "deny" as const,
-      }))
-    : [];
-  return [...openCodeRuntimePermissionRules(runtimePolicy), ...skillRules, ...webRules];
+  return [...openCodeRuntimePermissionRules(runtimePolicy), ...skillRules];
 }
-
-/** OpenCode's own web tools, replaced by t3-code's while a web provider is selected. */
-const OPENCODE_NATIVE_WEB_PERMISSIONS = ["websearch", "webfetch"] as const;
 
 function openCodeRuntimePermissionRules(
   runtimePolicy: ProviderAdapter.ProviderAdapterV2RuntimePolicy,
@@ -754,9 +742,8 @@ function permissionRuleEquals(
 export function openCodeChildPermissionRules(
   runtimePolicy: ProviderAdapter.ProviderAdapterV2RuntimePolicy,
   nativeChildRules: PermissionRuleset,
-  nativeWebToolsDisabled = false,
 ): PermissionRuleset {
-  const parentRules = openCodePermissionRules(runtimePolicy, [], nativeWebToolsDisabled);
+  const parentRules = openCodePermissionRules(runtimePolicy);
   const inheritedRules = parentRules.filter(
     (rule) => rule.permission === "external_directory" || rule.action === "deny",
   );
@@ -999,8 +986,11 @@ export const makeOpenCodeAdapterV2 = Effect.fn("makeOpenCodeAdapterV2")(function
 
         const mcpSession = yield* mcpSessions.read(input.threadId);
         const hasT3Mcp = mcpSession !== undefined && !connection.external;
-        const nativeWebToolsDisabled = hasT3Mcp && mcpSession.nativeWebToolsDisabled === true;
-        const orchestrationSystemPrompt = t3OrchestrationSystemPrompt(hasT3Mcp);
+        // OpenCode keeps its own web tools as the fallback.
+        const orchestrationSystemPrompt = t3OrchestrationSystemPrompt(
+          hasT3Mcp,
+          mcpSession?.webToolsPreferred === true,
+        );
         if (hasT3Mcp) {
           yield* OpenCodeRuntime.runOpenCodeSdk("mcp.add", () =>
             client.mcp.add({
@@ -1470,7 +1460,6 @@ export const makeOpenCodeAdapterV2 = Effect.fn("makeOpenCodeAdapterV2")(function
             const childPermission = openCodeChildPermissionRules(
               turn.runtimePolicy,
               nativeChildSession.permission ?? [],
-              nativeWebToolsDisabled,
             );
             yield* sdkCall(
               "session.update",
@@ -3099,7 +3088,6 @@ export const makeOpenCodeAdapterV2 = Effect.fn("makeOpenCodeAdapterV2")(function
               if (threadInput.existingProviderThread?.nativeThreadRef != null) {
                 return yield* runtimeSession.resumeThread({
                   providerThread: threadInput.existingProviderThread,
-                  runtimePolicy: threadInput.runtimePolicy,
                 });
               }
               // No title: OpenCode generates one from the first prompt only when
@@ -3109,19 +3097,11 @@ export const makeOpenCodeAdapterV2 = Effect.fn("makeOpenCodeAdapterV2")(function
               const response = yield* sdkCall(
                 "session.create",
                 {
-                  permission: openCodePermissionRules(
-                    threadInput.runtimePolicy,
-                    disabledSkills,
-                    nativeWebToolsDisabled,
-                  ),
+                  permission: openCodePermissionRules(threadInput.runtimePolicy, disabledSkills),
                 },
                 () =>
                   client.session.create({
-                    permission: openCodePermissionRules(
-                      threadInput.runtimePolicy,
-                      disabledSkills,
-                      nativeWebToolsDisabled,
-                    ),
+                    permission: openCodePermissionRules(threadInput.runtimePolicy, disabledSkills),
                   }),
               );
               const nativeSession = unwrapData("session.create", response);
@@ -3168,16 +3148,13 @@ export const makeOpenCodeAdapterV2 = Effect.fn("makeOpenCodeAdapterV2")(function
                 client.session.get({ sessionID: sessionId }),
               );
               const nativeSession = unwrapData("session.get", response);
-              // The saved rules may predate a skill switched off or a web
-              // provider picked since; a resume that knows its policy brings
-              // them up to date.
+              // The saved rules may predate a skill switched off since; a
+              // resume that knows its policy brings them up to date.
               const appThreadId = threadInput.threadId ?? threadInput.providerThread.appThreadId;
               if (threadInput.runtimePolicy !== undefined && appThreadId !== null) {
-                const session = yield* mcpSessions.read(appThreadId);
                 const permission = openCodePermissionRules(
                   threadInput.runtimePolicy,
-                  session?.tools?.disabledSkills ?? [],
-                  !connection.external && session?.nativeWebToolsDisabled === true,
+                  (yield* mcpSessions.read(appThreadId))?.tools?.disabledSkills ?? [],
                 );
                 const saved = nativeSession.permission ?? [];
                 const unchanged =
@@ -3709,11 +3686,7 @@ export const makeOpenCodeAdapterV2 = Effect.fn("makeOpenCodeAdapterV2")(function
                 yield* sdkCall("session.update", { sessionID: fork.id }, () =>
                   client.session.update({
                     sessionID: fork.id,
-                    permission: openCodePermissionRules(
-                      input.runtimePolicy,
-                      disabledSkills,
-                      nativeWebToolsDisabled,
-                    ),
+                    permission: openCodePermissionRules(input.runtimePolicy, disabledSkills),
                   }),
                 );
                 retainedThread = {

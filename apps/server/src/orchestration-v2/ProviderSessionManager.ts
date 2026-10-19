@@ -412,15 +412,15 @@ export const layerWithOptions = (
           );
         },
       );
-      // Built-in keeps each CLI's own web tools; any other provider replaces them.
-      const nativeWebToolsDisabled = Option.match(serverSettings, {
+      // Built-in leaves agents on their own web tools; any other provider is preferred.
+      const webToolsPreferred = Option.match(serverSettings, {
         onNone: () => Effect.succeed(DEFAULT_WEB_TOOL_PROVIDER !== "builtin"),
         onSome: (service) =>
           service.getSettings.pipe(
             Effect.map((settings) => settings.web.provider !== "builtin"),
             Effect.catch(() =>
               Effect.logWarning(
-                "Could not read the web provider; leaving the CLI's web tools on.",
+                "Could not read the web provider; not steering agents to T3 web tools.",
               ).pipe(Effect.as(false)),
             ),
           ),
@@ -525,7 +525,7 @@ export const layerWithOptions = (
                 >(["orchestration", "worktree", "pull-requests"]);
                 if (browserToolsAvailable) capabilities.add("preview");
                 if (deviceToolsAvailable) capabilities.add("device");
-                const webToolsDisabled = yield* nativeWebToolsDisabled;
+                const webToolsSelected = yield* webToolsPreferred;
                 const existing = yield* mcpSessions.read(threadId);
                 if (existing !== undefined) {
                   // Reserve before the async resolve so a release cannot
@@ -557,7 +557,7 @@ export const layerWithOptions = (
                     yield* mcpSessions.set({
                       ...existing,
                       tools,
-                      nativeWebToolsDisabled: webToolsDisabled,
+                      webToolsPreferred: webToolsSelected,
                     });
                     return { mcpCredentialId: existing.providerSessionId, issued: false };
                   }
@@ -573,7 +573,7 @@ export const layerWithOptions = (
                 yield* mcpSessions.set({
                   ...credential.config,
                   tools,
-                  nativeWebToolsDisabled: webToolsDisabled,
+                  webToolsPreferred: webToolsSelected,
                 });
                 reserveMcpCredential(threadId, credential.config.providerSessionId);
                 return { mcpCredentialId: credential.config.providerSessionId, issued: true };

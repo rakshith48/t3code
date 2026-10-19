@@ -11,7 +11,7 @@ export const WEB_TOOL_PROVIDER_LABELS: Record<WebToolProvider, string> = {
 
 /** What the Settings → Web picker says about each choice, on every client. */
 export const WEB_PROVIDER_DESCRIPTION =
-  "The service behind the web_search and web_fetch tools T3 Code gives every agent. While one is selected, Claude, Codex, Cursor, and OpenCode lose their own web search and fetch; Built-in leaves every CLI on its own web tools.";
+  "The service behind the web_search and web_fetch tools T3 Code gives every agent. While one is selected, agents are asked to use it first and keep their own web search and fetch as the fallback; Built-in leaves them on their own.";
 
 /** Where each provider's write-only API key lives in `settings.web`, and how to get one. */
 export const WEB_TOOL_API_KEYS: Record<

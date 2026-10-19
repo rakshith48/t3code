@@ -49,6 +49,8 @@ describe("T3 orchestration provider instructions", () => {
   it("only exposes the system prompt when the T3 MCP server is attached", () => {
     assert.equal(t3OrchestrationSystemPrompt(false), undefined);
     assert.equal(t3OrchestrationSystemPrompt(true), T3_CODE_ORCHESTRATION_INSTRUCTIONS);
+    assert.equal(t3OrchestrationSystemPrompt(false, true), undefined);
+    assert.include(t3OrchestrationSystemPrompt(true, true), "T3 Code web tools");
   });
 
   it("gives ACP sessions provider-neutral mode, browser, and orchestration guidance", () => {
@@ -86,6 +88,32 @@ describe("T3 orchestration provider instructions", () => {
     assert.include(withoutMcp, "T3 Code interaction mode: Default");
     assert.notInclude(withoutMcp, "T3 Code collaborative browser");
     assert.notInclude(withoutMcp, "T3 Code orchestration");
+  });
+
+  it("adds the web tool guidance to the first prompt only while a web provider is selected", () => {
+    const prompt = "Find the docs.";
+    assert.notInclude(
+      t3OrchestrationPromptForFirstRun({ prompt, runOrdinal: 1, hasT3Mcp: true }),
+      "T3 Code web tools",
+    );
+    assert.include(
+      t3OrchestrationPromptForFirstRun({
+        prompt,
+        runOrdinal: 1,
+        hasT3Mcp: true,
+        webToolsPreferred: true,
+      }),
+      "T3 Code web tools",
+    );
+    assert.equal(
+      t3OrchestrationPromptForFirstRun({
+        prompt,
+        runOrdinal: 1,
+        hasT3Mcp: false,
+        webToolsPreferred: true,
+      }),
+      prompt,
+    );
   });
 
   it("steers ACP agents to T3's web tools only while a web provider is selected", () => {

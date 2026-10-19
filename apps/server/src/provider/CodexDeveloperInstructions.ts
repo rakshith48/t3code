@@ -5,6 +5,7 @@ import { buildRuntimeInstructions } from "@t3tools/provider-core/server/runtimeI
 import {
   T3_CODE_BROWSER_TOOL_INSTRUCTIONS,
   T3_CODE_ORCHESTRATION_INSTRUCTIONS,
+  T3_CODE_WEB_TOOL_INSTRUCTIONS,
 } from "@t3tools/provider-core/server/orchestrationInstructions";
 
 const T3_CODE_DEVICE_TOOL_INSTRUCTIONS = `## T3 Code devices
@@ -211,6 +212,8 @@ export function buildCodexAdditionalContext(
    * setting, so the prompt cannot claim tools the turn doesn't have.
    */
   toolsAvailable: boolean | T3CodeToolAvailability = true,
+  /** Set while a web provider is selected in Settings → Tools → Web. */
+  webToolsPreferred = false,
 ): Record<string, V2TurnStartParams__AdditionalContextEntry> {
   const tools = toolInstructions(toolsAvailable);
   // Separate keys keep each value under Codex's per-entry token cap.
@@ -221,5 +224,8 @@ export function buildCodexAdditionalContext(
       value: buildRuntimeInstructions({ harness: "Codex", ...runtime }),
     },
     ...(tools ? { t3_code_tools: { kind: "application", value: tools } } : {}),
+    ...(webToolsPreferred
+      ? { t3_code_web_tools: { kind: "application", value: T3_CODE_WEB_TOOL_INSTRUCTIONS } }
+      : {}),
   };
 }

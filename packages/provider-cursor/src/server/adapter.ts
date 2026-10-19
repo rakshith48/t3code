@@ -330,7 +330,6 @@ export function makeCursorAgentOptions(input: {
 }): AgentOptions {
   const policy = cursorRuntimeAgentPolicy(input.runtimePolicy);
   const mcpServers = cursorMcpServers(input.mcpSession);
-  const nativeWebToolsDisabled = input.mcpSession?.nativeWebToolsDisabled === true;
   return {
     model: cursorSdkModelSelection(input.modelSelection),
     name: `T3 Code ${input.threadId}`,
@@ -344,12 +343,8 @@ export function makeCursorAgentOptions(input: {
         enabled: policy.sandboxEnabled,
       },
       enableAgentRetries: true,
-      // Task children only receive the parent's tool exclusions when this is set.
-      ...(nativeWebToolsDisabled ? { subagentInherit: {} } : {}),
     },
     ...(mcpServers === undefined ? {} : { mcpServers }),
-    // Not persisted by the SDK, so every create and resume passes it again.
-    ...(nativeWebToolsDisabled ? { disallowedTools: ["webSearch", "webFetch"] } : {}),
   };
 }
 
@@ -2135,6 +2130,7 @@ export const makeCursorAdapterV2 = Effect.fn("makeCursorAdapterV2")(function* (
         const resolveUserMessage = Effect.fnUntraced(function* (
           turnInput: ProviderAdapter.ProviderAdapterV2TurnInput,
           mcpServers: Record<string, McpServerConfig> | undefined,
+          webToolsPreferred: boolean,
         ) {
           const rawText = turnInput.message.text;
           if (rawText.trim() === "/compress" && turnInput.message.attachments.length === 0) {
@@ -2165,6 +2161,7 @@ export const makeCursorAdapterV2 = Effect.fn("makeCursorAdapterV2")(function* (
             }),
             runOrdinal: turnInput.runOrdinal,
             hasT3Mcp: mcpServers !== undefined,
+            webToolsPreferred,
           });
           const images = yield* Effect.forEach(
             turnInput.message.attachments.filter(isProviderNativeImageAttachment),
@@ -2226,8 +2223,14 @@ export const makeCursorAdapterV2 = Effect.fn("makeCursorAdapterV2")(function* (
               modelSelection: turnInput.modelSelection,
               runtimePolicy: turnInput.runtimePolicy,
             });
-            const mcpServers = cursorMcpServers(yield* mcpSessions.read(turnInput.threadId));
-            const message = yield* resolveUserMessage(turnInput, mcpServers);
+            const mcpSession = yield* mcpSessions.read(turnInput.threadId);
+            const mcpServers = cursorMcpServers(mcpSession);
+            // Cursor keeps its own web tools as the fallback.
+            const message = yield* resolveUserMessage(
+              turnInput,
+              mcpServers,
+              mcpSession?.webToolsPreferred === true,
+            );
             const pendingUpdates: Array<InteractionUpdate> = [];
             let context: ActiveCursorTurn | null = null;
             const sdkRun = yield* agent.session.send({

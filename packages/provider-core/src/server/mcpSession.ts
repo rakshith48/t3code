@@ -54,10 +54,10 @@ export interface McpProviderSessionConfig {
   readonly tools?: McpProviderSessionTools;
   /**
    * Set while a web provider other than Built-in is selected in Settings →
-   * Web. Adapters then turn off the CLI's own web search and fetch so the
-   * agent uses T3's `web_search` and `web_fetch` instead.
+   * Tools → Web. Adapters then ask the agent to use T3's `web_search` and
+   * `web_fetch` first; its own web tools stay available as the fallback.
    */
-  readonly nativeWebToolsDisabled?: boolean;
+  readonly webToolsPreferred?: boolean;
 }
 
 /** Provider env with the device variables applied over `base`, or `base` untouched. */

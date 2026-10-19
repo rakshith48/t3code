@@ -1,8 +1,10 @@
 import { it } from "@effect/vitest";
 import type { ServerSettings } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import { HttpClient, HttpClientRequest, HttpClientResponse } from "effect/http";
+import * as TestClock from "effect/testing/TestClock";
 import { describe, expect } from "vite-plus/test";
 
 import * as Settings from "../serverSettings.ts";
@@ -74,7 +76,11 @@ describe("WebTools", () => {
           url: "https://api.firecrawl.dev/v2/search",
           authorization: undefined,
           apiKey: undefined,
-          body: { query: "effect schema", limit: WebTools.MAX_WEB_SEARCH_RESULTS },
+          body: {
+            query: "effect schema",
+            limit: WebTools.MAX_WEB_SEARCH_RESULTS,
+            integration: "_t3code",
+          },
         },
       ]);
       expect(result.provider).toBe("firecrawl");
@@ -111,6 +117,7 @@ describe("WebTools", () => {
             formats: ["markdown"],
             onlyMainContent: true,
             maxAge: 0,
+            integration: "_t3code",
           },
         },
       ]);
@@ -138,7 +145,7 @@ describe("WebTools", () => {
       const error = yield* withWebTools({ provider: "exa" }, refuseRequests, (tools) =>
         tools.fetch({ url: "https://example.com" }),
       ).pipe(Effect.flip);
-      expect(error.message).toBe("Add your Exa API key in Settings → Web.");
+      expect(error.message).toBe("Add your Exa API key in Settings → Tools → Web.");
     }),
   );
 
@@ -151,8 +158,33 @@ describe("WebTools", () => {
         (tools) => tools.search({ query: "anything" }),
       ).pipe(Effect.flip);
       expect(error.message).toBe(
-        "Tavily web search failed with HTTP 401. Check the API key in Settings → Web.",
+        "Tavily web search failed with HTTP 401. Check the API key in Settings → Tools → Web. Use your own web tools for this request.",
       );
+    }),
+  );
+
+  it.effect("explains a keyless refusal instead of blaming an API key", () =>
+    Effect.gen(function* () {
+      const { client } = recordingClient(403, { success: false, error: "suspicious IP" });
+      const error = yield* withWebTools({ provider: "firecrawl" }, client, (tools) =>
+        tools.search({ query: "anything" }),
+      ).pipe(Effect.flip);
+      expect(error.message).toContain("keyless tier refused this network");
+      expect(error.message).not.toContain("Check the API key");
+      expect(error.message).toContain("Use your own web tools");
+    }),
+  );
+
+  it.effect("gives up on a provider that does not answer", () =>
+    Effect.gen(function* () {
+      const hanging = HttpClient.make(() => Effect.never);
+      const fiber = yield* withWebTools({ provider: "firecrawl" }, hanging, (tools) =>
+        tools.search({ query: "anything" }),
+      ).pipe(Effect.flip, Effect.forkChild);
+      yield* TestClock.adjust("31 seconds");
+      const error = yield* Fiber.join(fiber);
+      expect(error._tag).toBe("WebToolsTimeoutError");
+      expect(error.message).toContain("Use your own web tools");
     }),
   );
 });

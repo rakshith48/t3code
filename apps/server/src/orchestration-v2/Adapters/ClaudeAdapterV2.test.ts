@@ -498,36 +498,36 @@ describe("ClaudeAdapterV2 MCP query overrides", () => {
     browserToolsAvailable: true,
   });
 
-  it("removes Claude's own web tools while a T3 web provider is selected", () => {
+  it("asks Claude to prefer t3-code's web tools while a web provider is selected", () => {
     const threadId = ThreadId.make("thread-claude-mcp-web-provider");
     const overrides = ClaudeAdapterV2.claudeMcpQueryOverrides({
-      mcpSession: { ...mcpSessionFor(threadId), nativeWebToolsDisabled: true },
+      mcpSession: { ...mcpSessionFor(threadId), webToolsPreferred: true },
       readOnlySandbox: false,
     });
-    assert.deepEqual(overrides.disallowedTools, ["WebSearch", "WebFetch"]);
-    // The live query must reopen when the web provider changes.
+    assert.isTrue(overrides.webToolsPreferred);
+    // The instructions live in the system prompt, so a change must reopen the query.
     const queryPolicy = ClaudeAdapterV2.claudeRuntimeQueryPolicyForRuntimePolicy(
       CLAUDE_TEST_RUNTIME_POLICY,
     );
-    const { disallowedTools: _removed, ...withNativeWebTools } = overrides;
+    const { webToolsPreferred: _preferred, ...withoutPreference } = overrides;
     assert.notEqual(
       ClaudeAdapterV2.claudeEffectiveQueryPolicyKey(queryPolicy, overrides),
-      ClaudeAdapterV2.claudeEffectiveQueryPolicyKey(queryPolicy, withNativeWebTools),
+      ClaudeAdapterV2.claudeEffectiveQueryPolicyKey(queryPolicy, withoutPreference),
     );
     assert.isUndefined(
       ClaudeAdapterV2.claudeMcpQueryOverrides({
         mcpSession: mcpSessionFor(threadId),
         readOnlySandbox: false,
-      }).disallowedTools,
+      }).webToolsPreferred,
     );
   });
 
-  it("keeps Claude's own web tools when no MCP session exists", () => {
+  it("does not steer to t3-code's web tools when no MCP session exists", () => {
     const overrides = ClaudeAdapterV2.claudeMcpQueryOverrides({
       mcpSession: undefined,
       readOnlySandbox: false,
     });
-    assert.isUndefined(overrides.disallowedTools);
+    assert.isUndefined(overrides.webToolsPreferred);
   });
 
   it("leaves an absent allowlist absent when no MCP session exists", () => {
@@ -1219,6 +1219,7 @@ describe("ClaudeAdapterV2 user tools", () => {
           endpoint: "http://127.0.0.1:43123/mcp",
           authorizationHeader: "Bearer secret-claude-token",
           browserToolsAvailable: true,
+          webToolsPreferred: true,
           tools: {
             servers: [
               {
@@ -1256,6 +1257,14 @@ describe("ClaudeAdapterV2 user tools", () => {
         assert.deepInclude(openedOptions?.mcpServers ?? {}, {
           context7: { type: "stdio", command: "npx", args: ["context7"], env: {} },
         });
+        // A selected web provider reaches the opened query's system prompt, and
+        // Claude Code keeps its own web tools as the fallback.
+        const systemPrompt = openedOptions?.systemPrompt;
+        assert.include(
+          typeof systemPrompt === "object" && "append" in systemPrompt ? systemPrompt.append : "",
+          "T3 Code web tools",
+        );
+        assert.notInclude(openedOptions?.disallowedTools ?? [], "WebSearch");
         const settings = openedOptions?.settings;
         assert.deepEqual(typeof settings === "object" ? settings.skillOverrides : undefined, {
           "grill-me": "off",
